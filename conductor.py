@@ -1,96 +1,66 @@
 #!/usr/bin/env python3
 
+
+import cgi
+import http.server
+import io
+import mimetypes
+import os
+import socketserver
+import sys
+import threading
 import time
+import urllib
 
-import boto3
-from minions import READY, RUNNING, STOPPED, track_down_minions
+import conductor_web
+import conductor_backend
 
-ec2 = boto3.resource('ec2')
+if len(sys.argv) != 2:
+    print(f'Usage: {sys.argv[0]} SCALE_FACTOR', file=sys.stderr)
+    sys.exit(1)
+scale_factor = sys.argv[1]
 
-# Just take any existing minions.
-# We recognize our minions by the tag MinionOf=joeri.
-# This should be generalized of course.
-MY_MINIONS = sorted(
-    track_down_minions(ec2, dict(MinionOf='joeri')),
-    key=lambda m: m.name)
+# rest server config
+hostName = "localhost"
+serverPort = 8080
 
+# backend config
+explainer_mapi_url = 'mapi:monetdb://localhost:50000/SF-0_01'
+minion_mapi_url = f'mapi:monetdb://HOSTNAME:50000/SF-{scale_factor.replace(".", "_")}'
 
-def show_status():
-    now = time.time()
-    for i, m in enumerate(MY_MINIONS):
-        print(f"{i+1:2} {m.name:>10}/{m.id:20}", end="")
-        if not m.desired_state or m.desired_state == m.observed_state:
-            print(m.observed_state, end="")
-        else:
-            how_long = now - m.last_action_time
-            print(f"{m.observed_state}->{m.desired_state} since {how_long:.1f}s")
-        print()
+# left here by Ansible who got it from Terraform
+cluster_name = open(os.path.expanduser('~/.cluster_name')).read().strip()
 
+small_pool_filter = dict(
+    cluster=cluster_name,
+    cluster_groups='minions',
+    size='small')
+large_pool_filter = dict(
+    cluster=cluster_name,
+    cluster_groups='minions',
+    size='large')
 
-def get_command():
-    # hacky hacky
-    commandline = input("> ").strip()
-    if not commandline:
-        return '', []
-
-    words = commandline.split()
-    command = words[0].lower()
-
-    targets = set()
-    for arg in words[1:]:
-        if arg == 'all':
-            targets = targets.union(set(MY_MINIONS))
-            continue
-        try:
-            n = int(arg)
-        except ValueError:
-            # will be rejected below
-            n = len(MY_MINIONS) + 1000
-            continue
-        if n > len(MY_MINIONS):
-            print(f"Please give numbers 1..{len(MY_MINIONS)}")
-            return '', []
-
-        targets.add(MY_MINIONS[n - 1])
-
-    return command, targets
+backend = conductor_backend.make_backend(
+    conductor_backend.Connector(explainer_mapi_url),
+    conductor_backend.Connector(minion_mapi_url),
+    dict(SMALL=small_pool_filter, LARGE=large_pool_filter),
+)
 
 
-class Delayer:
-    def __init__(self, delay):
-        self.next_time = 0
-        self.delay = delay
-
-    def await(self):
-        now = time.time()
-        sleep = self.next_time - now
-        if sleep > 0:
-            time.sleep(sleep)
-        self.next_time = now + self.delay
+class ThreadingSimpleServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    pass
 
 
-delayer = Delayer(1)
-while 1:
-    delayer.await()
-    for minion in MY_MINIONS:
-        minion.poll()
+if __name__ == "__main__":
+    restserver = ThreadingSimpleServer(
+        (hostName, serverPort), conductor_web.ConductorRequestHandler)
+    restserver.backend = backend
+    print("Server started http://%s:%s" % (hostName, serverPort))
 
-    print()
-    show_status()
+    try:
+        restserver.serve_forever()
+    except KeyboardInterrupt:
+        pass
 
-    command, targets = get_command()
-    desired = None
-    if command in ['', 'status']:
-        continue
-    elif command == 'up':
-        desired = READY
-    elif command == 'down':
-        desired = STOPPED
-    else:
-        print(f"Unknown command: {command}")
-        continue
-    
-    assert desired != None
-    for minion in targets:
-        if not minion.make(desired):
-            print(f"Error: cannot make {minion.name} {desired}")
+    restserver.server_close()
+    print("Server stopped.")

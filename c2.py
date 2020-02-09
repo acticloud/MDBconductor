@@ -3,6 +3,7 @@
 from collections import defaultdict
 import os
 import time
+import sys
 
 import boto3
 
@@ -102,12 +103,14 @@ while 1:
         elif cmd.startswith("cs"):
             pool = small_pool
         else:
-            print("Either cl or cr")
+            print("Either cl or cs")
             continue
         c = pool.claim()
         CLAIMS[c.name].append(c)
         print(f"Claimed {c.name}")
         quick = True
+    elif cmd.startswith("q"):
+        sys.exit(0)
     elif cmd.startswith("r"):
         try:
             idx = int(cmd[1:]) - 1

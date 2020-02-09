@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<meta charset="utf-8">
+	<title>MonetDB Conductor</title>
+	<style>
+		canvas {
+			border: 1px dotted lightgrey;
+			/* width: 30em;
+			height: 8em; */
+		}
+	</style>
+
+	<script src="chartjs_2.9.3.js"></script>
+
+	<script src="longpoll.js"></script>
+	<script src="poolchart.js"></script>
+
+	<script>
+		var CHARTS = {};
+
+		function update_status_message(status_body) {
+			document
+				.getElementById("status_message")
+				.innerText = status_body.status.text;
+			// .innerText = JSON.stringify(status_body.status, null, 4);
+		}
+
+		function update_charts(status_body) {
+			let now = new Date().getTime();
+			let status = status_body.status;
+			for (name in status.stats) {
+				stats = status.stats[name];
+				if (!CHARTS[name]) {
+					let canvases = document.getElementById("canvases");
+					let header = document.createElement("p");
+					header.innerHTML = "Pool " + name;
+					let canvas = document.createElement("canvas");
+					canvases.appendChild(header);
+					canvases.appendChild(canvas);
+					let poolchart = new_poolchart(canvas);
+					CHARTS[name] = poolchart;
+				}
+				let poolchart = CHARTS[name];
+				add_to_poolchart(poolchart, now, stats);
+				refresh_poolchart(poolchart, now);
+			}
+		}
+
+		function update_all(status_body) {
+			update_status_message(status_body);
+			update_charts(status_body);
+		}
+
+		function on_load() {
+			longpoll_status("/status/", update_all);
+		}
+	</script>
+</head>
+
+<body onload="on_load()">
+	<h1>MonetDB Conductor Status</h1>
+
+	<div id="canvases"></div>
+
+	<pre id="status_message"></pre>
+
+	<script>document.write('<script src="http://' + (location.host || 'localhost').split(':')[0] + ':35729/livereload.js?snipver=1"></' + 'script>')</script>
+</body>
+
+</html>

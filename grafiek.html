@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<meta charset="utf-8">
+	<title>MonetDB Conductor</title>
+	<style>
+		canvas {
+			border: dotted lightgrey;
+			width: 30em;
+			height: 5em;
+		}
+	</style>
+
+	<script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.3"></script>
+
+	<script type="text/javascript">
+		var the_data = [];
+		var charts = {};
+
+		function create_canvas_if_necessary(poolname) {
+			var id = "pool-canvas-" + poolname;
+			if (document.getElementById(id)) {
+				return id;
+			}
+			var canvases = document.getElementById("canvases");
+			var header = document.createElement("p");
+			header.innerHTML = "Pool " + poolname + ":";
+			var canvas = document.createElement("canvas");
+			canvas.setAttribute("id", id);
+			canvases.appendChild(header);
+			canvases.appendChild(canvas);
+			return canvas;
+		}
+
+		function create_chart(canvas, poolname) {
+			// Separate into series andconvert time to minutes before latest.
+			// Or more precisely, negative minutes after latest.
+			var load_series = [];
+			var running_series = [];
+			var starting_and_running_series = [];
+			var desired_series = [];
+
+			var ctx = canvas.getContext('2d');
+			// https://github.com/chartjs/Chart.js/blob/master/samples/scales/time/line-point-data.html
+			var chart = new Chart(ctx, {
+				// The type of chart we want to create
+				type: 'line',
+
+				// The data for our dataset
+				data: {
+					datasets: [
+						// Running: darker green: starting: lighter green on top of that
+						{
+							label: 'Running',
+							data: running_series,
+							steppedLine: 'before',
+							fill: true,
+							//
+							pointRadius: 0,
+							borderWidth: 0,
+							borderColor: '#afc',
+							backgroundColor: '#afc',
+						},
+						{
+							label: 'Starting + Running',
+							data: starting_and_running_series,
+							steppedLine: 'before',
+							fill: true,
+							//
+							pointRadius: 0,
+							borderWidth: 0,
+							borderColor: '#dfe',
+							backgroundColor: '#dfe'
+						},
+
+						// Desired: dotted line
+						{
+							label: 'Desired',
+							data: desired_series,
+							steppedLine: 'before',
+							fill: false,
+							//
+							pointRadius: 0,
+							borderWidth: 1,
+							borderDash: [5, 5],
+							borderColor: 'black',
+							backgroundColor: 'black',
+						},
+
+						// Load
+						{
+							label: 'Load',
+							data: load_series,
+							// steppedLine: 'before',
+							fill: false,
+							showLine: false,
+							//
+							pointRadius: 1,
+							borderWidth: 0,
+							borderColor: 'pink',
+							backgroundColor: 'pink',
+						}
+					]
+				},
+
+				// Configuration options go here
+				options: {
+					responsive: false,
+					animation: {
+						duration: 0,
+					},
+					legend: {
+						display: false,
+					},
+					scales: {
+						xAxes: [{
+							type: 'linear',
+							display: true,
+							scaleLabel: {
+								display: true,
+								labelString: 'minutes ago'
+							}
+						}],
+						yAxes: [
+							{
+								type: 'linear',
+								ticks: {
+									stepSize: 0.5,
+								},
+								// display: true,
+								// scaleLabel: {
+								// 	display: true,
+								// 	labelString: 'pear',
+								// }
+							},
+						],
+					}
+				}
+			});
+
+			function receive_update(item, now) {
+				var t = (item.timestamp - now) / 60000;
+				load_series.push({ x: t, y: item.load });
+				running_series.push({ x: t, y: item.up });
+				starting_and_running_series.push({ x: t, y: item.starting + item.up });
+				desired_series.push({ x: t, y: item.desired });
+			}
+
+			chart.receive_update = receive_update;
+			return chart;
+		}
+
+		function on_status_update(entry) {
+			for (pool in entry.stats) {
+				if (!charts[pool]) {
+					var canvas = create_canvas_if_necessary(pool);
+					charts[pool] = create_chart(canvas, pool);
+				}
+				var chart = charts[pool];
+				var item = entry.stats[pool];
+				item.timestamp = entry.timestamp;
+				chart.receive_update(item, entry.timestamp);
+			}
+		}
+
+		function on_load() {
+			var status_txt = document.getElementById('status_txt');
+			fetch("data.json")
+				.then(function (response) {
+					// unpack the data
+					if (!response.ok) {
+						console.log("not ok")
+						return response.text().then(t => Promise.reject(t));
+					}
+					console.log("ok")
+					return response.json();
+				})
+				.then(function (data) {
+					var per_pool = {};
+					var charts = {};
+					the_data = data;
+					var i = 0;
+
+					function updater() {
+						i += 1;
+						var entry = the_data[i];
+						status_txt.innerHTML = "" + i + "<br>" + JSON.stringify(entry);
+						if (entry) {
+							on_status_update(entry);
+						}
+					}
+					setInterval(updater, 1000);
+					// for (entry of data) {
+					// 	for (pool in entry.stats) {
+					// 		if (per_pool[pool] == undefined) {
+					// 			per_pool[pool] = [];
+					// 		}
+					// 		if (charts[pool] == undefined) {
+					// 			var canvas = create_canvas_if_necessary(pool);
+					// 			charts[pool] = create_chart(canvas, pool);
+					// 		}
+
+					// 		var item = entry.stats[pool];
+					// 		item.timestamp = entry.timestamp;
+					// 		charts[pool].receive_update(item, latest);
+					// 	}
+					// }
+					// status_txt.innerHTML += "" + latest + "<br>";
+					// for (pool in per_pool) {
+					// 	charts[pool].update();
+					// }
+				})
+				.catch(function (err) {
+					console.log("error!")
+					status_txt.innerHTML = "Error loading status: " + err;
+					status_txt.style.backgroundColor = "#FDD";
+				})
+				.finally(function () {
+					console.log("finally")
+				})
+		}
+	</script>
+</head>
+
+<body onload="on_load()">
+	<h1>Grafiekje</h1>
+
+	<div id="canvases"></div>
+
+	<h2>Pool status</h2>
+	<pre id="status_txt" />
+	</body>
+
+</html>

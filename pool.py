@@ -3,6 +3,7 @@
 from collections import defaultdict
 import random
 import threading
+import time
 
 from minions import Minion, NONEXISTENT, PENDING, RUNNING, SHUTTING_DOWN, TERMINATED, STOPPING, STOPPED, READY
 
@@ -18,6 +19,7 @@ class Pool:
         self._claims = {}
         self._desired_up = 0
         self.shrink_allowed = True
+        self.loadaverage = LoadAverage()
 
         for m in members:
             name = m.name
@@ -212,6 +214,7 @@ class Pool:
                 return None
             victim = random.choice(ups)
             self._claims[victim] += 1
+            self.loadaverage.add_load(1)
             return Claim(self, victim, self._by_name[victim].ip, self._generation[victim])
 
     def _release(self, name, generation):
@@ -221,6 +224,7 @@ class Pool:
             claims = self._claims[name]
             assert claims > 0
             self._claims[name] -= 1
+            self.loadaverage.remove_load(1)
             if claims == 1:
                 # now 0
                 if self._state[name] == 'FINISHING':
@@ -241,8 +245,75 @@ class Claim:
             self._released = True
 
     def __enter__(self):
-        if self.released:
+        if self._released:
             raise Exception("Claim has already been released")
+        return self
 
     def __exit__(self, _type, _value, _traceback):
         self.release()
+
+
+class LoadAverage:
+    def __init__(self, half_life=60):
+        self.half_life = half_life
+        self._alpha = 0.5 ** (1.0 / half_life)
+        self._load = 0
+        self._echo = 0
+
+        now = time.time()
+        self._start_time = now
+        self._last_change = now
+        self._last_echo_update = now
+
+    @property
+    def load(self):
+        now = time.time()
+        elapsed = now - self._last_echo_update
+        echo = self._echo * self._alpha ** elapsed
+        return self._load + echo
+
+    @property
+    def time_since_change(self):
+        now = time.time()
+        return now - self._last_change
+
+    @property
+    def time_running(self):
+        now = time.time()
+        return now - self._start_time
+
+    def _update_echo(self, now):
+        elapsed = now - self._last_echo_update
+        self._echo *= self._alpha ** elapsed
+        self._last_echo_update = now
+
+    def add_load(self, amount):
+        assert amount >= 0
+        now = time.time()
+        self._last_change = now
+
+        self._update_echo(now)
+        self._load += amount
+        self._echo -= amount
+        if self._echo < 0:
+            self._echo = 0
+
+    def remove_load(self, amount):
+        assert amount >= 0
+        now = time.time()
+        self._last_change = now
+        if amount > self._load:
+            amount = self._load
+
+        self._update_echo(now)
+        self._load -= amount
+        self._echo += amount
+
+    def adjust_load(self, amount):
+        if amount > 0:
+            self.add_load(amount)
+        else:
+            self.remove_load(-amount)
+
+    def set_load(self, load):
+        self.adjust_load(load - self._load)
