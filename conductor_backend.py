@@ -52,7 +52,7 @@ class Backend:
                     wake_them = True
                 msgs[name] = msg
             if wake_them:
-                print()
+                #print()
                 with self._pool_condition:
                     self._pool_condition.notify_all()
             self._update_status()
@@ -231,7 +231,9 @@ class Backend:
 INSTANCE_TYPE_MEMORY_MiB = {
     "t2.micro": 1024,
     "t2.small": 2048,
+    "t2.medium": 4096,
     "t2.large": 8192,
+    "t2.xlarge": 16384,
 }
 
 
@@ -250,7 +252,7 @@ def make_backend(explainer_connector, minion_connector_template, filters):
                 f"Don't know how much memory a {instance_type} has")
         p = pool.Pool(name, ms)
         pools[name] = p
-        specs[name] = mem * 1024 * 1024 * 0.2
+        specs[name] = mem * 1024 * 1024 * 1.0
 
     return Backend(pools, specs, explainer_connector, minion_connector_template)
 
@@ -297,16 +299,19 @@ class Connector:
 
 class PollHub:
     def __init__(self, initial_state):
+        self._last_update = 0
         self._id = uuid.uuid4().hex
         self._condition = threading.Condition()
         self._generation = 1
         self._state = initial_state
 
     def set_state(self, new_state, filter=lambda x:x):
+        now = time.time()
         with self._condition:
-            if filter(new_state) == filter(self._state):
+            if now - self._last_update < 60 and filter(new_state) == filter(self._state):
                 return
             self._state = new_state
+            self._last_update = now
             self._generation += 1
             self._condition.notify_all()
 

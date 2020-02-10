@@ -7,10 +7,11 @@ set -e
 
 while true
 do
-	for q in $QUERIES
+	for q in $(ls $QUERIES | shuf )
 	do
-		curl -s http://localhost:8080/query/ -F query=@$q \
-			| jq .advice
+		qq="$(basename "$q")"
+		reply="$(curl -s http://localhost:8080/query/ -F query=@$q | jq .advice)"
+		echo  "q${qq%.sql} $reply"
 	done
 	sleep $DELAY
 done
